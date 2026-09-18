@@ -1,5 +1,6 @@
 package com.gitpocket.app.ui.files
 
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import android.webkit.MimeTypeMap
@@ -20,12 +21,16 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -33,7 +38,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.gitpocket.app.GitPocketApp
 import com.gitpocket.app.data.files.FileEntry
+import kotlinx.coroutines.launch
+import java.io.File
 import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -45,6 +53,8 @@ fun FileBrowserScreen(
     viewModel: FileBrowserViewModel = viewModel(),
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
     val entries by viewModel.entries.collectAsState()
     val repoName by viewModel.repoName.collectAsState()
     val path by viewModel.path.collectAsState()
@@ -54,6 +64,7 @@ fun FileBrowserScreen(
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
@@ -95,7 +106,16 @@ fun FileBrowserScreen(
                         if (entry.isDirectory) {
                             viewModel.openDirectory(repoId, entry.path)
                         } else {
-                            openEntry(repoId, entry, viewModel, onOpenFile, context)
+                            viewModel.openEntry(repoId, entry.path) { editable ->
+                                if (editable) {
+                                    onOpenFile(entry.path)
+                                } else {
+                                    val error = openWithExternalApp(context, repoId, entry.path)
+                                    if (error != null) {
+                                        scope.launch { snackbarHostState.showSnackbar(error) }
+                                    }
+                                }
+                            }
                         }
                     },
                 )
@@ -104,32 +124,67 @@ fun FileBrowserScreen(
     }
 }
 
-private fun openEntry(
-    repoId: Long,
-    entry: FileEntry,
-    viewModel: FileBrowserViewModel,
-    onOpenFile: (String) -> Unit,
-    context: android.content.Context,
-) {
-    if (viewModel.isEditable(repoId, entry.path)) {
-        onOpenFile(entry.path)
-    } else {
-        openWithExternalApp(context, repoId, entry.path)
+private fun openWithExternalApp(context: android.content.Context, repoId: Long, path: String): String? {
+    return try {
+        val root = (context.applicationContext as GitPocketApp).container.gitManager.localDir(repoId)
+        val file = File(root, path)
+        val uri: Uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        val mime = guessMimeType(file)
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, mime)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(intent, "Open with"))
+        null
+    } catch (e: ActivityNotFoundException) {
+        "No app installed to open this file type"
+    } catch (e: Exception) {
+        "Could not open file: ${e.message}"
     }
 }
 
-private fun openWithExternalApp(context: android.content.Context, repoId: Long, path: String) {
-    val root = (context.applicationContext as com.gitpocket.app.GitPocketApp).container.gitManager.localDir(repoId)
-    val file = java.io.File(root, path)
-    val uri: Uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-    val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase(Locale.ROOT))
-        ?: "application/octet-stream"
-    val intent = Intent(Intent.ACTION_VIEW).apply {
-        setDataAndType(uri, mime)
-        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    }
-    runCatching { context.startActivity(intent) }
+private fun guessMimeType(file: File): String {
+    val ext = file.extension.lowercase(Locale.ROOT)
+    MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)?.let { return it }
+    return MIME_TYPES[ext] ?: "application/octet-stream"
 }
+
+private val MIME_TYPES = mapOf(
+    "pdf" to "application/pdf",
+    "png" to "image/png",
+    "jpg" to "image/jpeg",
+    "jpeg" to "image/jpeg",
+    "gif" to "image/gif",
+    "webp" to "image/webp",
+    "bmp" to "image/bmp",
+    "svg" to "image/svg+xml",
+    "mp4" to "video/mp4",
+    "m4v" to "video/mp4",
+    "mkv" to "video/x-matroska",
+    "webm" to "video/webm",
+    "3gp" to "video/3gpp",
+    "avi" to "video/x-msvideo",
+    "mp3" to "audio/mpeg",
+    "m4a" to "audio/mp4",
+    "wav" to "audio/x-wav",
+    "ogg" to "audio/ogg",
+    "opus" to "audio/opus",
+    "flac" to "audio/flac",
+    "zip" to "application/zip",
+    "gz" to "application/gzip",
+    "tgz" to "application/gzip",
+    "tar" to "application/x-tar",
+    "7z" to "application/x-7z-compressed",
+    "rar" to "application/vnd.rar",
+    "doc" to "application/msword",
+    "docx" to "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "xls" to "application/vnd.ms-excel",
+    "xlsx" to "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "ppt" to "application/vnd.ms-powerpoint",
+    "pptx" to "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "epub" to "application/epub+zip",
+    "apk" to "application/vnd.android.package-archive",
+)
 
 @Composable
 private fun FileRow(entry: FileEntry, onClick: () -> Unit) {

@@ -38,8 +38,14 @@ class FileBrowserViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { refresh(repoId, dirPath) }
     }
 
-    fun isEditable(repoId: Long, entryPath: String): Boolean =
-        container.fileBrowser.isEditableText(container.gitManager.localDir(repoId), entryPath)
+    fun openEntry(repoId: Long, entryPath: String, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val editable = withContext(Dispatchers.IO) {
+                container.fileBrowser.isEditableText(container.gitManager.localDir(repoId), entryPath)
+            }
+            onResult(editable)
+        }
+    }
 
     private suspend fun refresh(repoId: Long, dirPath: String) {
         _entries.value = withContext(Dispatchers.IO) {

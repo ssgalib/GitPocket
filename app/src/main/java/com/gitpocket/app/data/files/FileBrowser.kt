@@ -27,11 +27,9 @@ class FileBrowser {
 
     fun isEditableText(root: File, relative: String): Boolean {
         val f = File(root, relative)
-        if (!f.isFile || f.length() > MAX_TEXT_SIZE) return false
-        val ext = f.extension.lowercase()
-        if (ext in TEXT_EXTENSIONS) return true
-        val head = f.inputStream().use { it.readBytes() }
-        return !head.any { it == 0.toByte() }
+        if (!f.isFile) return false
+        if (f.length() > MAX_TEXT_SIZE) return false
+        return f.extension.lowercase() in TEXT_EXTENSIONS
     }
 
     fun file(root: File, relative: String): File = File(root, relative)
